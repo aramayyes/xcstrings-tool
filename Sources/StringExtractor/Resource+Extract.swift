@@ -14,7 +14,7 @@ extension Resource {
             switch segment {
             case .string(let contents):
                 defaultValue.append(.string(contents))
-            case .placeholder(let placeholder, let specifiedPosition):
+            case .placeholder(let placeholder, let specifier, let specifiedPosition):
                 // Figure out the position of the argument for this placeholder
                 let position: Int
                 if let specifiedPosition {
@@ -47,7 +47,7 @@ extension Resource {
                     )
                 }
 
-                defaultValue.append(.interpolation(name))
+                defaultValue.append(.interpolation(name, specifier))
                 arguments[position] = argument
             }
         }

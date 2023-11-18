@@ -1,71 +1,142 @@
 import ArgumentParser
 import Foundation
-import StringExtractor
-import struct StringResource.Resource
 import StringCatalog
+import StringExtractor
 import StringGenerator
+import struct StringResource.Resource
 import StringValidator
 
 struct Generate: ParsableCommand {
-    @Argument(
-        help: "Path to xcstrings String Catalog file",
-        completion: .file(extensions: ["xcstrings"]),
-        transform: { URL(filePath: $0, directoryHint: .notDirectory) }
-    )
-    var input
+  @Argument(
+    help: "Path to xcstrings String Catalog file",
+    completion: .file(extensions: ["xcstrings"]),
+    transform: { URL(filePath: $0, directoryHint: .notDirectory) }
+  )
+  var input
 
-    @Argument(
-        help: "Path to write generated Swift output",
-        completion: .file(extensions: ["swift"]),
-        transform: { URL(filePath: $0, directoryHint: .notDirectory) }
-    )
-    var output
+  @Argument(
+    help: "Path to write generated Swift code",
+    completion: .file(extensions: ["swift"]),
+    transform: { URL(filePath: $0, directoryHint: .notDirectory) }
+  )
+  var output
 
-    @Option(
-        name: .shortAndLong,
-        help: "Modify the Access Control for the generated source code"
-    )
-    var accessLevel: StringGenerator.AccessLevel?
+  @Option(
+    name: .shortAndLong,
+    help: "Path to difference xcstrings String Catalog file",
+    transform: { string in
+      string.isEmpty ? [] : string.components(separatedBy: .whitespaces).map {
+        URL(filePath: $0, directoryHint: .notDirectory)
+      }
+    }
+  )
+  var diffsInputs: [URL] = []
 
-    // MARK: - Program
-    
-    func run() throws {
-        // Load the source ensuring that errors are thrown in a diagnostic format for the input
-        let source = try withThrownErrorsAsDiagnostics(at: input) {
-            // Load the String Catalog file
-            let catalog = try StringCatalog(contentsOf: input)
+  @Option(
+    name: .shortAndLong,
+    help: "Path to write generated difference Swift code",
+    transform: { string in
+      string.isEmpty ? [] : string.components(separatedBy: .whitespaces).map {
+        URL(filePath: $0, directoryHint: .notDirectory)
+      }
+    }
+  )
+  var diffsOutputs: [URL] = []
 
-            // Extract resources from it
-            let result = try StringExtractor.extractResources(from: catalog)
+  @Option(
+    name: .shortAndLong,
+    help: "Modify the Access Control for the generated source code"
+  )
+  var accessLevel: StringGenerator.AccessLevel?
 
-            // Validate the extraction result
-            result.issues.forEach { warning($0.description, sourceFile: input) }
-            try ResourceValidator.validateResources(result.resources, in: input)
+  // MARK: - Program
 
-            // Generate the associated Swift source
-            return StringGenerator.generateSource(
-                for: result.resources,
-                tableName: tableName,
-                accessLevel: resolvedAccessLevel
-            )
-        }
-
-        // Write the output and catch errors in a diagnostic format
-        try withThrownErrorsAsDiagnostics {
-            // Create the directory if it doesn't exist
-            try createDirectoryIfNeeded(for: output)
-
-            // Write the source to disk
-            try source.write(to: output, atomically: true, encoding: .utf8)
-            note("Output written to ‘\(output.path(percentEncoded: false))‘")
-        }
+  func run() throws {
+    let mainCatalog = try withThrownErrorsAsDiagnostics(at: input) {
+      try StringCatalog(contentsOf: input)
     }
 
-    var tableName: String {
-        input.lastPathComponent.replacingOccurrences(of: ".\(input.pathExtension)", with: "")
+    let mainResult = try withThrownErrorsAsDiagnostics(at: input) {
+      try StringExtractor.extractResources(from: mainCatalog)
     }
 
-    var resolvedAccessLevel: StringGenerator.AccessLevel {
-        .resolveFromEnvironment(or: accessLevel) ?? .internal
+    let mainSource = try withThrownErrorsAsDiagnostics(at: input) {
+      // Validate the extraction result
+      mainResult.issues.forEach { warning($0.description, sourceFile: input) }
+      try ResourceValidator.validateResources(mainResult.resources, in: input)
+
+      // Generate the associated Swift source
+      return StringGenerator.generateSource(
+        for: mainResult.resources,
+        tableName: tableName,
+        accessLevel: resolvedAccessLevel
+      )
     }
+
+    try withThrownErrorsAsDiagnostics {
+      try createDirectoryIfNeeded(for: output)
+
+      try mainSource.write(to: output, atomically: true, encoding: .utf8)
+      note("Output written to ‘\(output.path(percentEncoded: false))‘")
+    }
+
+    // Diffs generating.
+
+    let mainResultKeys = try withThrownErrorsAsDiagnostics(at: input) {
+      Set(mainResult.resources.map(\.key))
+    }
+    for (diffsInput, diffsOutput) in zip(diffsInputs, diffsOutputs) {
+      let source = try withThrownErrorsAsDiagnostics(at: diffsInput) {
+        try generateSource(
+          mainResultKeys: mainResultKeys,
+          diffsInput: diffsInput
+        )
+      }
+
+      try withThrownErrorsAsDiagnostics {
+        try createDirectoryIfNeeded(for: diffsOutput)
+
+        try source.write(to: diffsOutput, atomically: true, encoding: .utf8)
+        note("Output written to ‘\(diffsOutput.path(percentEncoded: false))‘")
+      }
+    }
+  }
+
+  func generateSource(
+    mainResultKeys: Set<String>,
+    diffsInput: URL
+  ) throws -> String {
+    let diffsCatalog = try StringCatalog(contentsOf: diffsInput)
+    let diffsResult = try StringExtractor.extractResources(from: diffsCatalog)
+
+    let result: StringExtractor.Result = (
+      diffsResult.resources
+        .filter { resource in
+          !mainResultKeys.contains { key in resource.key == key }
+        },
+      issues: diffsResult.issues
+    )
+
+    // Validate the extraction result
+    result.issues.forEach { warning($0.description, sourceFile: input) }
+    try ResourceValidator.validateResources(result.resources, in: input)
+
+    // Generate the associated Swift source
+    return StringGenerator.generateSource(
+      for: result.resources,
+      tableName: tableName,
+      accessLevel: resolvedAccessLevel
+    )
+  }
+
+  var tableName: String {
+    input.lastPathComponent.replacingOccurrences(
+      of: ".\(input.pathExtension)",
+      with: ""
+    )
+  }
+
+  var resolvedAccessLevel: StringGenerator.AccessLevel {
+    .resolveFromEnvironment(or: accessLevel) ?? .internal
+  }
 }
