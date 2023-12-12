@@ -14,7 +14,7 @@ public struct StringGenerator {
 
   let tableName: String
   let accessLevel: AccessLevel
-  let resourcesTree: Node
+  private let resourcesTree: Node
 
   init(tableName: String, accessLevel: AccessLevel, resources: [Resource]) {
     self.tableName = tableName
