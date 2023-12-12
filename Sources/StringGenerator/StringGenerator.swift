@@ -14,12 +14,12 @@ public struct StringGenerator {
 
   let tableName: String
   let accessLevel: AccessLevel
-  let resources: [Resource]
+  let resourcesTree: Node
 
   init(tableName: String, accessLevel: AccessLevel, resources: [Resource]) {
     self.tableName = tableName
     self.accessLevel = accessLevel
-    self.resources = resources
+    resourcesTree = Self.structure(resources: resources)
   }
 
   public static func generateSource(
@@ -72,64 +72,28 @@ public struct StringGenerator {
     ExtensionDeclSyntax(
       extendedType: IdentifierTypeSyntax(name: "LocalizationKey"),
       memberBlockBuilder: {
-        for resource in resources {
-          resource.declaration(
-            tableName: tableName,
-            accessLevel: accessLevel.token
-          )
-        }
+        generateNodeBlock(resourcesTree)
       }
     )
   }
 
-  // MARK: - Helpers
+  @MemberBlockItemListBuilder
+  private func generateNodeBlock(_ node: Node) -> MemberBlockItemListSyntax {
+    for child in node.children {
+      EnumDeclSyntax(
+        name: .identifier(child.name),
+        memberBlockBuilder: {
+          generateNodeBlock(child)
+        }
+      )
+    }
 
-  var typeDocumentation: Trivia {
-    let exampleResource = resources.first(where: { $0.arguments.isEmpty })
-    let exampleId = exampleResource?.identifier ?? "foo"
-    let exampleValue = exampleResource?.defaultValue.first?.content ?? "bar"
-    let exampleAccessor = ".\(variableToken.text).\(exampleId)"
-
-    return [
-      .docLineComment(
-        "/// Constant values for the \(tableName) Strings Catalog"
-      ),
-      .newlines(1),
-      .docLineComment("///"),
-      .newlines(1),
-      .docLineComment("/// ```swift"),
-      .newlines(1),
-      .docLineComment("/// // Accessing the localized value directly"),
-      .newlines(1),
-      .docLineComment(
-        "/// let value = String(localized: \(exampleAccessor))"
-      ),
-      .newlines(1),
-      .docLineComment(
-        "/// value // \"\(exampleValue.replacingOccurrences(of: "\n", with: "\\n"))\""
-      ),
-      .newlines(1),
-      .docLineComment("///"),
-      .newlines(1),
-      .docLineComment("/// // Working with SwiftUI"),
-      .newlines(1),
-      .docLineComment("/// Text(\(exampleAccessor))"),
-      .newlines(1),
-      .docLineComment("/// ```"),
-      .newlines(1),
-    ]
-  }
-
-  var structToken: TokenSyntax {
-    .identifier(SwiftIdentifier.identifier(from: tableName))
-  }
-
-  var variableToken: TokenSyntax {
-    .identifier(SwiftIdentifier.variableIdentifier(for: tableName))
-  }
-
-  var bundleToken: TokenSyntax {
-    .identifier("bundleDescription")
+    for resource in node.strings {
+      resource.declaration(
+        tableName: tableName,
+        accessLevel: accessLevel.token
+      )
+    }
   }
 }
 
@@ -379,5 +343,59 @@ private extension Unicode.Scalar {
     // Exclude non-printables before the space character U+20, and anything
     // including and above the DEL character U+7F.
     value >= 0x20 && value < 0x7F
+  }
+}
+
+// MARK: Tree
+
+private class Node {
+  let name: String
+  var strings: [Resource] = []
+  var children: [Node] = []
+
+  init(name: String, strings: [Resource] = [], children: [Node] = []) {
+    self.name = name
+    self.strings = strings
+    self.children = children
+  }
+}
+
+extension StringGenerator {
+  private static func structure(
+    resources: [Resource],
+    atKeyPath keyPath: [String] = []
+  ) -> Node {
+    let root = Node(name: keyPath.last ?? "")
+
+    // Collect strings for this level
+    let strings = resources
+      .filter { $0.keyComponents.count == keyPath.count + 1 }
+      .sorted { $0.key.lowercased() < $1.key.lowercased() }
+
+    if !strings.isEmpty {
+      root.strings = strings
+    }
+
+    // collect children for this level, group them by name for the next level,
+    // sort them and then structure those grouped resources
+    let childResources = resources
+      .filter { $0.keyComponents.count > keyPath.count + 1 }
+
+    let children = Dictionary(grouping: childResources) {
+      $0.keyComponents[keyPath.count]
+    }
+    .sorted { $0.key < $1.key }
+    .map { name, resources in
+      structure(
+        resources: resources,
+        atKeyPath: keyPath + [name]
+      )
+    }
+
+    if !children.isEmpty {
+      root.children = children
+    }
+
+    return root
   }
 }
