@@ -16,6 +16,8 @@ public struct Resource: Equatable {
     /// The string segments that make up the string literal to be used as the default value
     public let defaultValue: [StringSegment]
 
+    public let keyComponents: [String]
+
     public init(
         key: String,
         comment: String?,
@@ -28,6 +30,7 @@ public struct Resource: Equatable {
         self.identifier = identifier
         self.arguments = arguments
         self.defaultValue = defaultValue
+        self.keyComponents = key.components(separatedBy: ".")
     }
 }
 
