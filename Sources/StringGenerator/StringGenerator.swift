@@ -161,7 +161,7 @@ extension Resource {
   }
 
   var name: TokenSyntax {
-    .identifier(identifier)
+    .identifier(keyComponents.last ?? identifier)
   }
 
   var type: IdentifierTypeSyntax {
